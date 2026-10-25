@@ -1,0 +1,307 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#1f4e79">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Time clock">
+<title>Formo time clock</title>
+<!--
+  Formo time clock page. One file, two homes:
+  - served by Code.gs (doGet) inside Google's script frame, where it calls the
+    script through google.script.run. Phones refuse locations there.
+  - hosted as a plain page (index.html), opened with #k=<token>&api=<web app URL>,
+    where it posts to the script and can ask the phone for its location.
+-->
+<style>
+:root {
+  --bg: #eef1f4; --panel: #ffffff; --ink: #17212b; --ink-2: #44515e; --ink-3: #6f7c88; --line: #d5dce3;
+  --accent: #1f4e79; --accent-ink: #ffffff; --tape: #e9b820;
+  --good: #19704a; --good-soft: #def2e7; --warn: #9a5b00; --warn-soft: #fbecd3; --bad: #b3261e; --bad-soft: #f9e1de;
+  --in: #19704a; --out: #1f4e79;
+  --font-display: "Barlow Condensed", "Arial Narrow", "Roboto Condensed", system-ui, sans-serif;
+  --font-body: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #11161b; --panel: #192028; --ink: #e5eaef; --ink-2: #aab5c0; --ink-3: #7f8b97; --line: #2b3540;
+    --accent: #84b3e2; --accent-ink: #0c1620; --tape: #e2b42a;
+    --good: #63c795; --good-soft: #14301f; --warn: #e6a64c; --warn-soft: #34260f; --bad: #f08c82; --bad-soft: #3a1b18;
+    --in: #2f8f63; --out: #3b6fa0;
+    color-scheme: dark;
+  }
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.45 var(--font-body); }
+main { max-width: 480px; margin: 0 auto; padding: max(14px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) 40px max(16px, env(safe-area-inset-left)); display: flex; flex-direction: column; gap: 14px; }
+header { display: flex; align-items: center; gap: 10px; font: 700 15px/1 var(--font-display); letter-spacing: .08em; text-transform: uppercase; color: var(--ink-2); }
+header .rule { width: 26px; height: 10px; background: repeating-linear-gradient(90deg, var(--tape) 0 2px, transparent 2px 5px); }
+h1 { margin: 0; font: 700 34px/1.05 var(--font-display); letter-spacing: .01em; }
+h2 { margin: 0 0 8px; font: 700 15px/1.2 var(--font-display); letter-spacing: .08em; text-transform: uppercase; color: var(--ink-2); }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; }
+.state { display: flex; flex-direction: column; gap: 2px; border-left-width: 6px; }
+.state.on { border-left-color: var(--in); }
+.state.off { border-left-color: var(--line); }
+.state b { font: 700 24px/1.15 var(--font-display); }
+.muted { color: var(--ink-3); }
+.small { font-size: 14px; }
+.mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+button { font: inherit; cursor: pointer; }
+.big { width: 100%; min-height: 84px; border: 0; border-radius: 10px; color: #fff; font: 700 30px/1 var(--font-display); letter-spacing: .04em; text-transform: uppercase; box-shadow: 0 2px 0 rgba(0, 0, 0, .15); }
+.big.in { background: var(--in); }
+.big.out { background: var(--out); }
+.big:disabled { opacity: .55; cursor: default; }
+.btn { min-height: 44px; padding: 0 16px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--ink); font-weight: 600; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.row { display: flex; gap: 10px; flex-wrap: wrap; }
+.row > .btn { flex: 1; }
+#msg:empty { display: none; }
+.note { margin: 0; padding: 10px 12px; border-radius: 8px; background: var(--panel); border: 1px solid var(--line); }
+.note.good { background: var(--good-soft); border-color: transparent; }
+.note.warn { background: var(--warn-soft); border-color: transparent; }
+.note.bad { background: var(--bad-soft); border-color: transparent; }
+table { width: 100%; border-collapse: collapse; font-size: 15px; }
+td { padding: 7px 0; border-top: 1px solid var(--line); vertical-align: top; }
+tr:first-child td { border-top: 0; }
+td.h { text-align: right; white-space: nowrap; }
+tfoot td { border-top: 2px solid var(--ink-3); font-weight: 700; }
+.flag { color: var(--warn); font-weight: 600; }
+details summary { font: 700 15px/1.2 var(--font-display); letter-spacing: .08em; text-transform: uppercase; color: var(--ink-2); cursor: pointer; min-height: 28px; display: flex; align-items: center; }
+form { display: flex; flex-direction: column; gap: 12px; margin-top: 12px; }
+label { display: flex; flex-direction: column; gap: 4px; font-size: 14px; font-weight: 600; color: var(--ink-2); }
+input, textarea { font: 16px var(--font-body); color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; min-height: 44px; width: 100%; }
+.two { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+ul.fixes { list-style: none; margin: 12px 0 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+ul.fixes li { font-size: 14px; border-top: 1px solid var(--line); padding-top: 8px; }
+[hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<script type="application/json" id="boot"><?!= boot ?></script>
+<main>
+  <header><span class="rule" aria-hidden="true"></span>Formo time clock</header>
+  <h1 id="who">Time clock</h1>
+  <section class="card state off" id="state" aria-live="polite"><b id="status">Checking…</b><span id="since" class="muted"></span></section>
+  <p id="stale" class="note warn" hidden></p>
+  <button id="punch" class="big in" type="button" disabled>Clock in</button>
+  <div id="alt" class="row" hidden></div>
+  <p id="msg" class="note" role="status"></p>
+  <p class="muted small" style="margin:0">Your location is saved each time you clock in or out.</p>
+  <section class="card"><h2>This week</h2><div id="week" class="muted small">Loading…</div></section>
+  <details class="card" id="fixbox">
+    <summary>Fix my time</summary>
+    <form id="fix">
+      <label>Day<input type="date" name="date" required></label>
+      <div class="two">
+        <label>Clocked in at<input type="time" name="in"></label>
+        <label>Clocked out at<input type="time" name="out"></label>
+      </div>
+      <label>What happened<textarea name="reason" rows="2" required placeholder="Forgot to clock out. Left at 5:30."></textarea></label>
+      <button class="btn primary" type="submit">Send for review</button>
+      <p class="muted small" style="margin:0">Fill in only the time that was missed or wrong. Your hours change once the request is approved.</p>
+    </form>
+    <ul class="fixes" id="fixes"></ul>
+  </details>
+</main>
+<script>
+'use strict';
+const $ = s => document.querySelector(s);
+const pad = n => String(n).padStart(2, '0');
+const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const GAS = !!(window.google && google.script && google.script.run);
+const API_RE = /^https:\/\/script\.google\.com\/(?:a\/macros\/[\w.-]+|macros)\/s\/[\w-]+\/exec$/;
+const STALE_H = 14;
+
+// Who this is and where the script lives: injected by doGet, or carried in the
+// link's #k=…&api=… and remembered so the home-screen icon keeps working.
+const CONF = (() => {
+  let boot = null;
+  try { boot = JSON.parse($('#boot').textContent); } catch (e) { boot = null; }
+  if (GAS) return { k: (boot && boot.k) || '' };
+  const h = new URLSearchParams(location.hash.slice(1));
+  let c = { k: h.get('k') || '', api: h.get('api') || '' };
+  try {
+    if (c.k && c.api) localStorage.setItem('formo-clock', JSON.stringify(c));
+    else c = JSON.parse(localStorage.getItem('formo-clock') || 'null') || c;
+  } catch (e) { /* private mode: the link still works */ }
+  if (!API_RE.test(c.api)) c.api = '';
+  return c;
+})();
+
+const DEVICE = (() => {
+  let id = '';
+  try { id = localStorage.getItem('formo-device') || ''; if (!id) { id = Math.random().toString(36).slice(2, 8); localStorage.setItem('formo-device', id); } } catch (e) { id = ''; }
+  const ua = navigator.userAgent;
+  const os = /iPhone|iPad|iPod/.test(ua) ? 'iPhone' : /Android/.test(ua) ? 'Android' : /Macintosh/.test(ua) ? 'Mac' : /Windows/.test(ua) ? 'Windows' : 'other';
+  return (id ? id + ' ' : '') + os;
+})();
+
+function call(action, data) {
+  const body = Object.assign({ k: CONF.k, action, device: DEVICE }, data || {});
+  if (GAS) return new Promise((res, rej) => google.script.run.withSuccessHandler(res).withFailureHandler(rej).api(body));
+  return fetch(CONF.api, { method: 'POST', body: JSON.stringify(body) })
+    .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); });
+}
+
+// ---------------------------------------------------------------- location
+const LOC_TEXT = {
+  denied: 'location is turned off for this page. Allow it in your phone’s settings for this site.',
+  blocked: 'this page can’t ask for your location. Use the clock link you were sent.',
+  unavailable: 'your phone couldn’t find where you are.',
+  timeout: 'your phone took too long to find where you are.',
+  unsupported: 'this browser can’t share a location.',
+};
+function locationBlocked() {
+  const p = document.permissionsPolicy || document.featurePolicy;
+  try { return !!(p && p.allowsFeature && !p.allowsFeature('geolocation')); } catch (e) { return false; }
+}
+function where() {
+  return new Promise(res => {
+    if (locationBlocked()) return res({ loc: 'blocked' });
+    if (!navigator.geolocation) return res({ loc: 'unsupported' });
+    navigator.geolocation.getCurrentPosition(
+      p => res({ lat: p.coords.latitude, lng: p.coords.longitude, acc: p.coords.accuracy }),
+      e => res({ loc: e.code === 1 ? (GAS ? 'blocked' : 'denied') : e.code === 2 ? 'unavailable' : 'timeout' }),
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 });
+  });
+}
+
+// ---------------------------------------------------------------- time words
+const clock = d => d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+const day = d => d.toLocaleDateString('en-US', { weekday: 'short', month: 'numeric', day: 'numeric' });
+const sameDay = (a, b) => a.toDateString() === b.toDateString();
+const when = iso => { const d = new Date(iso); return sameDay(d, new Date()) ? clock(d) : day(d) + ', ' + clock(d); };
+const hours = ms => (ms / 36e5).toFixed(2).replace(/\.?0+$/, '') || '0';
+const span = ms => { const m = Math.max(0, Math.round(ms / 6e4)); return (m >= 60 ? Math.floor(m / 60) + ' h ' : '') + (m % 60) + ' min'; };
+const hhmm = s => { if (!/^\d\d:\d\d$/.test(s || '')) return ''; const [h, m] = s.split(':').map(Number); return clock(new Date(2000, 0, 1, h, m)); };
+const isoDay = d => d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+
+// ---------------------------------------------------------------- state
+let ST = null, busy = false, staleAt = 0;
+function say(text, kind) { const m = $('#msg'); m.textContent = text || ''; m.className = 'note' + (kind ? ' ' + kind : ''); }
+
+function shifts() {
+  const ps = (ST.recent || []).map(r => ({ t: new Date(r.time), kind: r.kind })).sort((a, b) => a.t - b.t);
+  const out = []; let open = null;
+  for (const p of ps) {
+    if (p.kind === 'in') { if (open) out.push({ in: open, out: null }); open = p.t; }
+    else { out.push({ in: open, out: p.t }); open = null; }
+  }
+  if (open) out.push({ in: open, out: null, live: true });
+  return out;
+}
+
+function render() {
+  if (!ST) return;
+  const open = ST.open, now = Date.now();
+  const since = open ? new Date(open.since) : null;
+  const stale = !!(since && now - since > STALE_H * 36e5);
+  $('#who').textContent = ST.person;
+  $('#state').className = 'card state ' + (open ? 'on' : 'off');
+  $('#status').textContent = open ? (stale ? 'Still clocked in' : 'On the clock') : 'Clocked out';
+  const lastOut = (ST.recent || []).filter(r => r.kind === 'out').pop();
+  $('#since').textContent = open ? 'since ' + when(open.since) + ' · ' + span(now - since) : lastOut ? 'last clocked out ' + when(lastOut.time) : '';
+
+  const btn = $('#punch'), alt = $('#alt');
+  if (stale) {
+    $('#stale').hidden = false;
+    $('#stale').textContent = 'You never clocked out from ' + when(open.since) + '. Send a fix for that day under “Fix my time”, then clock in for today.';
+    btn.textContent = 'Clock in'; btn.className = 'big in'; btn.dataset.kind = 'in'; btn.dataset.again = '1';
+    alt.hidden = false;
+    alt.innerHTML = '<button class="btn" type="button" id="still">I’m still working: clock out now</button>';
+  } else {
+    $('#stale').hidden = true; alt.hidden = true; alt.innerHTML = '';
+    btn.textContent = open ? 'Clock out' : 'Clock in'; btn.className = 'big ' + (open ? 'out' : 'in');
+    btn.dataset.kind = open ? 'out' : 'in'; btn.dataset.again = '';
+  }
+  btn.disabled = busy;
+  if (alt.firstChild) alt.firstChild.disabled = busy;
+  if (stale && staleAt !== +since) { staleAt = +since; const f = $('#fix'); f.date.value = isoDay(since); f.in.value = ''; f.out.value = ''; }
+
+  // This week, Monday first.
+  const t = new Date(), start = new Date(t.getFullYear(), t.getMonth(), t.getDate() - ((t.getDay() + 6) % 7));
+  const wk = shifts().filter(s => (s.in || s.out) >= start);
+  let total = 0;
+  const rows = wk.map(s => {
+    let h = '', note = '';
+    if (s.in && s.out) { total += s.out - s.in; h = hours(s.out - s.in) + ' h'; }
+    else if (s.live) { total += now - s.in; h = hours(now - s.in) + ' h'; note = ' <span class="muted">so far</span>'; }
+    else note = ' <span class="flag">' + (s.in ? 'no clock-out' : 'no clock-in') + '</span>';
+    const d = s.in || s.out;
+    return '<tr><td>' + esc(day(d)) + '<br><span class="muted">' + (s.in ? esc(clock(s.in)) : '?') + ' – ' + (s.out ? esc(clock(s.out)) : s.live ? 'now' : '?') + '</span>' + note + '</td><td class="h mono">' + h + '</td></tr>';
+  });
+  $('#week').className = rows.length ? '' : 'muted small';
+  $('#week').innerHTML = rows.length
+    ? '<table><tbody>' + rows.join('') + '</tbody><tfoot><tr><td>Total</td><td class="h mono">' + hours(total) + ' h</td></tr></tfoot></table>'
+    : 'No hours yet this week.';
+
+  $('#fixes').innerHTML = (ST.fixes || []).slice().reverse().map(f =>
+    '<li><b>' + esc(day(new Date(f.date + 'T12:00'))) + '</b>: ' + [f.in && 'in ' + hhmm(f.in), f.out && 'out ' + hhmm(f.out)].filter(Boolean).map(esc).join(', ') +
+    '<br><span class="muted">“' + esc(f.reason) + '” · sent ' + esc(when(f.time)) + '</span></li>').join('');
+}
+
+async function load(quiet) {
+  try {
+    const r = await call('status');
+    if (!r.ok) { say(r.error || 'The clock said no.', 'bad'); $('#status').textContent = 'Not set up'; return; }
+    ST = r; render();
+  } catch (e) {
+    if (!quiet) say('Could not reach the clock. Check your signal and reload.', 'bad');
+    $('#status').textContent = ST ? $('#status').textContent : 'Offline';
+  }
+}
+
+async function punch(kind, again) {
+  if (busy) return;
+  busy = true; render(); say('Finding your location…');
+  const w = await where();
+  say('Saving…');
+  try {
+    const r = await call('punch', Object.assign({ kind, again: !!again }, w));
+    if (r.ok) {
+      ST = r;
+      say((kind === 'in' ? 'Clocked in at ' : 'Clocked out at ') + clock(new Date(r.at)) + (w.lat != null ? '. Location saved.' : '. Saved without a location: ' + (LOC_TEXT[w.loc] || 'no location.')), w.lat != null ? 'good' : 'warn');
+    } else if (r.code === 'open') {
+      ST = r; say('You’re already clocked in.', 'warn');
+    } else if (r.code === 'closed') {
+      ST = r; say('You aren’t clocked in, so there is nothing to clock out. If you forgot to clock in, use “Fix my time”.', 'warn');
+    } else say(r.error || 'The clock said no.', 'bad');
+  } catch (e) {
+    say('Could not reach the clock, so nothing was saved. Check your signal and try again.', 'bad');
+  }
+  busy = false; render();
+}
+
+$('#punch').addEventListener('click', e => punch(e.currentTarget.dataset.kind, !!e.currentTarget.dataset.again));
+$('#alt').addEventListener('click', e => { if (e.target.id === 'still') punch('out'); });
+
+$('#fix').addEventListener('submit', async e => {
+  e.preventDefault();
+  const f = e.target, b = f.querySelector('button');
+  if (!f.in.value && !f.out.value) { say('Give the time you clocked in, clocked out, or both.', 'warn'); return; }
+  b.disabled = true;
+  try {
+    const r = await call('fix', { date: f.date.value, in: f.in.value, out: f.out.value, reason: f.reason.value });
+    if (r.ok) { ST = r; f.in.value = ''; f.out.value = ''; f.reason.value = ''; say('Sent. Your hours change once it’s approved.', 'good'); render(); }
+    else say(r.error || 'The clock said no.', 'bad');
+  } catch (err) { say('Could not reach the clock, so the request was not sent. Try again.', 'bad'); }
+  b.disabled = false;
+});
+
+$('#fix').date.value = isoDay(new Date());
+if (!CONF.k || (!GAS && !CONF.api)) {
+  $('#status').textContent = 'Link not set up';
+  say('This clock link is missing its code. Open the link you were sent.', 'bad');
+} else {
+  load();
+  setInterval(() => { if (ST && !busy) render(); }, 30000);
+  setInterval(() => { if (document.visibilityState === 'visible' && !busy) load(true); }, 120000);
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && !busy) load(true); });
+}
+</script>
+</body>
+</html>
